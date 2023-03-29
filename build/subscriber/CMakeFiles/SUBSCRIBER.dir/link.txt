@@ -1,0 +1,2 @@
+/usr/bin/ar qc libSUBSCRIBER.a CMakeFiles/SUBSCRIBER.dir/mqtt_sub.cpp.o
+/usr/bin/ranlib libSUBSCRIBER.a
