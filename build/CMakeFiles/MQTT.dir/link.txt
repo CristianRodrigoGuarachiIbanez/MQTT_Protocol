@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/MQTT.dir/main.cpp.o -o MQTT   -L/home/cristian/c++Project/mqtt/publisher  -L/home/cristian/c++Project/mqtt/subscriber  -Wl,-rpath,/home/cristian/c++Project/mqtt/publisher:/home/cristian/c++Project/mqtt/subscriber -lmosquitto publisher/libPUBLISHER.a subscriber/libSUBSCRIBER.a 

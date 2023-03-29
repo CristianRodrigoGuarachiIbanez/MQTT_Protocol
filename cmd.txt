@@ -1,9 +1,0 @@
-
-# ldconfig -p | grep <package>
-
-- mosquitto
-1. install on ubuntu
--> sudo apt update -y && sudo apt install mosquitto mosquitto-clients -y
-2. setup libs 
--> sudo apt-get install libmosquitto-dev
-
