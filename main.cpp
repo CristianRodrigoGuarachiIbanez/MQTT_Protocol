@@ -4,9 +4,6 @@
 #include <utility>
 #include <memory>
 
-#include "publisher/mqtt_pub.h"
-#include "subscriber/mqtt_sub.h"
-
 typedef void(Manager)(const std::string&msg, std::string&input);
 
 struct Print{
@@ -41,12 +38,9 @@ void pprint(std::string&in){
 }
 
 int main(){
-    
+
     std::string Msg("hola tu pendejo");
     std::function<void(std::string&)> p = pprint;
     p(Msg);
-
-    //SubPrint<Manager>(Msg);
-    //std::cout << "hola" <<std::endl;
-
+    return 0;
 }

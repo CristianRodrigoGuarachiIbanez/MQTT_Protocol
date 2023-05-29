@@ -1,0 +1,273 @@
+import org.jenkinsci.plugins.pipeline.modeldefinition.Utils
+
+def buildEnvImage = params.APP_BUILD_ENV_IMAGE
+def buildEnvRepo = ''
+def snapshotRepo = ''
+def integrationRepo = ''
+def targetBoxVariant = ''
+
+if (buildEnvImage.indexOf('vcm-sdk') != -1) {
+  targetBoxVariant = 'VCM'
+} else if (buildEnvImage.startsWith('vcm:')) {
+  buildEnvImage = buildEnvImage.substring(('vcm:').length())
+  targetBoxVariant = 'VCM'
+} else if (buildEnvImage.startsWith('tbm3:')) {
+  buildEnvImage = buildEnvImage.substring(('tbm3:').length())
+  targetBoxVariant = 'TBM3'
+} else {
+  targetBoxVariant = 'TBM3'
+}
+
+if (targetBoxVariant == 'VCM') {
+  buildEnvRepo = 'tbm3vcm/vcm-app-build-env'
+  snapshotRepo = 'vcm-applications-snapshot-local/cloud/rio'
+  integrationRepo = 'vcm-applications-integration-local/cloud/rio'
+} else {
+  buildEnvRepo = 'tbm3vcm/tbm3-app-build-env'
+  snapshotRepo = 'tbm3-applications-snapshot-local/de/my-rio'
+  integrationRepo = 'tbm3-applications-integration-local/de/my-rio'
+}
+
+echo "Building for box variant: ${targetBoxVariant}"
+
+podTemplate(
+  cloud: 'ABI3 K8S',
+  containers: [
+    containerTemplate(
+      name: 'jnlp',
+      image: "artifactory-trial.tools.msi.audi.com:18555/${buildEnvRepo}:${buildEnvImage}",
+      alwaysPullImage: buildEnvImage.endsWith('-latest'),
+      args: '${computer.jnlpmac} ${computer.name}',
+      resourceLimitCpu: '2000m',
+      resourceLimitMemory: '2Gi',
+      resourceRequestCpu: '2000m',
+      resourceRequestMemory: '2Gi',
+      ttyEnabled: true,
+      workingDir: '/home/jenkins'
+    )
+  ],
+  imagePullSecrets: ['artifactory-registry-pull'],
+  workspaceVolume: emptyDirWorkspaceVolume(false)
+) {
+
+node(POD_LABEL) {
+  def artifactoryServer = Artifactory.server 'ABI_Artifactory'
+  def buildInfo = Artifactory.newBuildInfo()
+  buildInfo.env.capture = true
+  buildInfo.env.collect()
+
+  stage('Checkout scm') {
+    checkout scm
+  }
+
+  def appBranch = env.BRANCH_NAME ?: params.APP_BRANCH
+  def appName = ''
+  def appVersion = ''
+  def sdkVersion = params.ANY_SDK_VERSION ? 'any' : env.SRE_SDK_VERSION
+
+  stage('Build') {
+    dir('build') {
+      withCredentials([
+        usernamePassword(
+          credentialsId: artifactoryServer.credentialsId,
+          usernameVariable: 'ARTIFACTORY_USER',
+          passwordVariable: 'ARTIFACTORY_PASSWORD'
+        )
+      ]) {
+        def cmakeArgs = params.APP_CMAKE_ARGS ?: '-DCMAKE_BUILD_TYPE=Release'
+        sh """#!/bin/bash
+          source /opt/poky/2.0.3/environment-setup-cortexa9hf-vfp-neon-poky-linux-gnueabi
+          cmake ${cmakeArgs} ../
+        """
+
+        def versionInfo = readFile('versioninfo.txt').split()
+        appName = versionInfo[0]
+        appVersion = versionInfo[1]
+
+        currentBuild.description = "BRANCH: ${appBranch} | VERSION: ${appVersion} | SDK: ${targetBoxVariant} ${sdkVersion}"
+
+        sh '''#!/bin/bash
+          source /opt/poky/2.0.3/environment-setup-cortexa9hf-vfp-neon-poky-linux-gnueabi
+          make all package
+        '''
+
+        if (checkTargetExist("doc")) {
+          sh 'make doc'
+        }
+
+        if (checkTargetExist("config_package")) {
+          sh 'make config_package'
+        }
+      }
+    }
+  }
+
+  stage('Unit test') {
+    dir('build') {
+      if (checkTargetExist("coverage")) {
+        sh 'make coverage'
+
+        archiveArtifacts 'unittest-report.xml'
+        junit 'unittest-report.xml'
+      } else {
+        Utils.markStageSkippedForConditional(STAGE_NAME)
+      }
+    }
+  }
+
+  stage('Module test') {
+    dir('build') {
+      if (checkTargetExist("moduletest")) {
+        sh 'make moduletest'
+
+        archiveArtifacts 'moduletest-report.xml'
+        junit 'moduletest-report.xml'
+      } else {
+        Utils.markStageSkippedForConditional(STAGE_NAME)
+      }
+    }
+  }
+
+  stage('Cpplint') {
+    dir('build') {
+      if (checkTargetExist("${appName}-cpplint")) {
+        sh "make ${appName}-cpplint"
+      } else {
+        Utils.markStageSkippedForConditional(STAGE_NAME)
+      }
+    }
+  }
+
+  def gitCommitHash = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+
+  stage('Upload to snapshot') {
+    dir('build') {
+      createBuildInfoArchive(appName, appVersion, appBranch, sdkVersion)
+
+      def uploadTarget = "${snapshotRepo}/${appName}/${appVersion}-SNAPSHOT/"
+      def uploadProps = "sreSdkVersion=${sdkVersion};gitCommitHash=${gitCommitHash}"
+      def uploadSpec = generateUploadSpec(appName, uploadTarget, uploadProps)
+      artifactoryServer.upload spec: uploadSpec, buildInfo: buildInfo
+    }
+  }
+
+  def appIntegrationTest = (params.APP_INTEGRATION_TEST != 'NONE') ? params.APP_INTEGRATION_TEST : ''
+
+  stage('Sign IPK') {
+    if (appIntegrationTest) {
+      triggerRemoteJob remoteJenkinsName: 'jenkins-rio-box.tools.msi.audi.com', job: 'tbm3.app-signing', parameters: [
+        "SRE_SDK_VERSION=${sdkVersion}",
+        "PKI_TYPE=development",
+        "APP_REPO=${snapshotRepo.substring(0, snapshotRepo.indexOf("/"))}",
+        "APP=${appName}"
+      ].join('\n')
+    } else {
+      Utils.markStageSkippedForConditional(STAGE_NAME)
+    }
+  }
+
+  stage('Integration test') {
+    if (appIntegrationTest) {
+      def baseSwVersionParam = targetBoxVariant + '_SW_VERSION';
+      def appDependenciesParam = params.IS_TPA_APP ? 'APP_TPA_DEPENDENCIES' : 'APP_TELE_DEPENDENCIES'
+      def testMap = [:]
+
+      for (restbusType in appIntegrationTest.split(',')) {
+        def currentType = restbusType
+
+        testMap[currentType] = {
+          build job: targetBoxVariant + '.app-integration-test', parameters: [
+            string(name: baseSwVersionParam, value: params.APP_INTEGRATION_BASESW ?: ''),
+            string(name: 'APP_NAME', value: appName),
+            string(name: 'APP_VERSION', value: appVersion),
+            string(name: 'APP_SDK_VERSION', value: sdkVersion),
+            string(name: appDependenciesParam, value: params.APP_DEPENDENCIES),
+            string(name: 'RESTBUS_TYPE', value: currentType),
+            string(name: 'TEST_XML_DIR', value: params.APP_INTEGRATION_TEST_DIR ?: 'integration-test'),
+            string(name: 'EMAIL_ADDRESS', value: params.APP_INTEGRATION_EMAIL),
+            booleanParam(name: 'IS_BASE_APP', value: params.IS_BASE_APP),
+            booleanParam(name: 'IS_TPA_APP', value: params.IS_TPA_APP)
+          ]
+        }
+      }
+
+      parallel testMap
+    } else {
+      Utils.markStageSkippedForConditional(STAGE_NAME)
+    }
+  }
+
+  stage('Upload to integration') {
+    if (appIntegrationTest && params.UPLOAD_TO_INTEGRATION_REPOSITORY) {
+      dir('build') {
+        createBuildInfoArchive(appName, appVersion, appBranch, sdkVersion)
+
+        def uploadTarget = "${integrationRepo}/${appName}/${appVersion}/"
+        def uploadProps = "sreSdkVersion=${sdkVersion};gitCommitHash=${gitCommitHash}"
+        def uploadSpec = generateUploadSpec(appName, uploadTarget, uploadProps)
+        artifactoryServer.upload spec: uploadSpec, buildInfo: buildInfo
+      }
+    } else {
+      Utils.markStageSkippedForConditional(STAGE_NAME)
+    }
+  }
+
+  artifactoryServer.publishBuildInfo buildInfo
+}
+
+}
+
+def checkTargetExist(target) {
+  return sh(script: "make -q ${target} 2> /dev/null", returnStatus: true) < 2
+}
+
+def createBuildInfoArchive(appName, appVersion, appBranch, sdkVersion) {
+  def gitUrl = sh(script: 'git config remote.origin.url', returnStdout: true).trim()
+  def gitRevision = sh(script: 'git rev-parse HEAD', returnStdout: true).trim()
+  writeJSON file: 'buildinfo/rio-app-manifest.json', pretty: 2, json: [
+    "git-url" : gitUrl,
+    "git-revision" : gitRevision,
+    "git-branch" : appBranch,
+    "name" : appName,
+    "version" : appVersion
+  ]
+
+  def buildLog = Jenkins.get().getItemByFullName(env.JOB_NAME).getBuild(env.BUILD_NUMBER).getLog()
+  writeFile file: 'buildinfo/buildlog.txt', text: buildLog
+
+  def buildinfoFile = (sdkVersion == 'any') ? "${appName}-${appVersion}-buildinfo.zip" : "${appName}-${appVersion}-V${sdkVersion}-buildinfo.zip"
+  sh "rm -f ${buildinfoFile}"
+  zip zipFile: buildinfoFile, dir: 'buildinfo'
+}
+
+def generateUploadSpec(appName, target, props) {
+  return """{
+    "files": [
+      {
+        "pattern": "${appName}_*.ipk",
+        "target": "${target}",
+        "props": "${props}"
+      },
+      {
+        "pattern": "${appName}-*-doc.tar.gz",
+        "target": "${target}",
+        "props": "${props}"
+      },
+      {
+        "pattern": "${appName}-*-coverage.tar.gz",
+        "target": "${target}",
+        "props": "${props}"
+      },
+      {
+        "pattern": "${appName}-*-coverage.html",
+        "target": "${target}",
+        "props": "${props}"
+      },
+      {
+        "pattern": "${appName}-*-buildinfo.zip",
+        "target": "${target}",
+        "props": "${props}"
+      }
+    ]
+  }"""
+}
