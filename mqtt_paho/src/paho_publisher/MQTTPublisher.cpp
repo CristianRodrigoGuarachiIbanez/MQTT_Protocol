@@ -65,7 +65,7 @@ namespace mqtt{
 
     void MqttPublisher::connLost(void *context, char *cause){
         std::cout << "\nConnection lost\n" << std::endl;
-        std::cout << "     cause: %s\n" << cause << std::endl;
+        std::cout << "     cause: \n" << std::string(cause) << std::endl;
     }
 }
 

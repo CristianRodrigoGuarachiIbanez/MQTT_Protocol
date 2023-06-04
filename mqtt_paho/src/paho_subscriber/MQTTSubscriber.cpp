@@ -1,4 +1,6 @@
 #include "MQTTSubscriber.h"
+#include <string>
+#include <ctime>
 
 
 //g++ -std=c++17 main.cpp mqtt.cpp -o main -lpaho-mqtt3cs
@@ -26,15 +28,41 @@ namespace mqtt{
         int i;
         char* payloadptr;
 
+        time_t rTime;
+        struct tm * timeinfo;
+        char buffer [80];
+
+        std::fstream f("/home/cristian/c++Project/mqtt/mqtt_paho/test/in_out_files/received_message.txt", std::ios_base::in | std::ios_base::out | std::fstream::app);
+        //std::ofstream f("/home/cristian/c++Project/mqtt/mqtt_paho/test/unittest_sub/received_message.txt");
+        if(!f.is_open()){
+            std::cout << "file could not be opened! \n";
+            exit(0);
+        }
+        
+        time(&rTime);
+        timeinfo = localtime(&rTime);
+        strftime(buffer,80,"%I:%M%p",timeinfo);
+        
+        if(!is_empty(f)){
+            std::cout <<" not empty!\n";
+            f.seekg(0, std::ios::end);
+        }else{
+            f.seekg(0, std::ios::beg);
+        }
+        f << buffer<< " : "; 
         std::cout <<"Message arrived\n"<<std::endl;
         std::cout <<"Topic: " << topicName << std::endl;
         std::cout <<"Message: " << std::endl;
         
         payloadptr = (char*)message->payload;
         for(i=0; i<message->payloadlen; i++){
-            putchar(*payloadptr++);
+            putchar(payloadptr[i]); //*payloadptr++);
+            char line = (char)payloadptr[i];
+            f<<std::string{line};
         }
         putchar('\n');
+        f<<"\n";
+        f.close();
         MQTTClient_freeMessage(&message);
         MQTTClient_free(topicName);
         return 1;
@@ -42,7 +70,7 @@ namespace mqtt{
 
     void MqttSubscriber::connLost(void *context, char *cause){
         std::cout << "\nConnection lost\n" << std::endl;
-        std::cout << "     cause: %s\n" << cause << std::endl;
+        std::cout << "     cause: " << cause << std::endl;
     }
 
     void MqttSubscriber::MqttConnect(const char * TOPIC, int QOS){

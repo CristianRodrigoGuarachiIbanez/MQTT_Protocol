@@ -2,7 +2,7 @@
 //#include "subscriber/mqtt_sub.h"
 #include "MQTTClient.h"
 #include <iostream>
-
+#include <fstream>
 
 namespace mqtt
 {
@@ -26,6 +26,9 @@ namespace mqtt
                     return 0;
                 }
                 
+            }
+            static bool is_empty(std::fstream& pFile){
+                return pFile.peek() == std::fstream::traits_type::eof();
             }
         private:
 

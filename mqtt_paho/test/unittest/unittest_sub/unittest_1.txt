@@ -1,6 +1,0 @@
-ADDRESS, cp://localhost:1883
-CLIENTID, TestClientSub
-TOPIC, MQTT/unittest1
-QOS, 1
-TIMEOUT, 0000L
-PAYLOAD,  l'm not sure what is your "application" in this case. However, for applications to interact with each other, usually we would need some kind of APIs (Application Programming Interface), so that what you have on another application (a new terminal as you said) could be properly used in the "main" application.
