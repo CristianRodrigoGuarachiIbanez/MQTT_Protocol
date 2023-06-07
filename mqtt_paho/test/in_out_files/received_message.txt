@@ -2,3 +2,5 @@
 
 09:31AM : l'm not sure what is your "application" in this case.
 
+03:25PM : In this post, I’ll describe what is MQTT and use it through command line with Mosquitto to understand its usage and then with Paho MQTT in Python in a Raspberry Pi 2 and in C and C++ in Linux Desktops. At the end there are Github links with QT Projects.
+

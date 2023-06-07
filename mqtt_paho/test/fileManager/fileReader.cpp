@@ -34,7 +34,20 @@ namespace FileManager{
         }
         // std::cout << "msg " << msg_ << std::endl;
         file_.close();
+        lastMsg_.append(getLastMessage());
     }
+
+    int FileReader::nthSubstr(int n){
+        std::string::size_type i = msg_.find("|");     // Find the first occurrence
+        int j;
+        for (j = 1; j < n && i != std::string::npos; ++j){
+            i = msg_.find("|", i+1); // Find the next occurrence
+        }
+        if (j == n)
+            return(i);
+        else
+            return(-1);
+    }   
     
 
 }
